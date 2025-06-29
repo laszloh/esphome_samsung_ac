@@ -815,6 +815,33 @@ namespace esphome
             }
         }
 
+        void send_nasa_packets(MessageTarget *target) {
+            uint32_t now = millis();
+            for (auto it = sent_packets.begin(); it != sent_packets.end(); ++it) {
+                auto &info = *it;
+
+                uint32_t time_since_last_sent = now - info.last_sent_time;
+    
+                uint32_t backoff_time = (1 << info.retry_count) * 1000;
+    
+                if (time_since_last_sent > backoff_time && info.retry_count < 8) {
+                    info.retry_count++;
+                    info.last_sent_time = now;
+        
+                    auto data = info.packet.encode();
+                    target->publish_data(data);
+        
+                    ESP_LOGW(TAG, "Resending packet %d number of attempts: %d, wait time: %d ms", 
+                             info.packet.command.packetNumber, info.retry_count, backoff_time);
+                }
+                else if (info.retry_count >= 8) {
+                    ESP_LOGW(TAG, "Packet %d failed after %d attempts. Removing from sent_packets.", 
+                             info.packet.command.packetNumber, info.retry_count);
+                    sent_packets.erase(it);
+                }
+            }
+        }
+
         DecodeResult try_decode_nasa_packet(std::vector<uint8_t> data)
         {
             return packet_.decode(data);
@@ -890,30 +917,7 @@ namespace esphome
                 process_messageset(source, dest, message, target);
             }
 
-            uint32_t now = millis();
-            for (auto it = sent_packets.begin(); it != sent_packets.end(); ++it) {
-                auto &info = *it;
-
-                uint32_t time_since_last_sent = now - info.last_sent_time;
-    
-                uint32_t backoff_time = (1 << info.retry_count) * 1000;
-    
-                if (time_since_last_sent > backoff_time && info.retry_count < 8) {
-                    info.retry_count++;
-                    info.last_sent_time = now;
-        
-                    auto data = info.packet.encode();
-                    target->publish_data(data);
-        
-                    ESP_LOGW(TAG, "Resending packet %d number of attempts: %d, wait time: %d ms", 
-                             info.packet.command.packetNumber, info.retry_count, backoff_time);
-                }
-                else if (info.retry_count >= 8) {
-                    ESP_LOGW(TAG, "Packet %d failed after %d attempts. Removing from sent_packets.", 
-                             info.packet.command.packetNumber, info.retry_count);
-                    sent_packets.erase(it);
-                }
-            }
+            send_nasa_packets(target);
         }
 
         void process_messageset_debug(std::string source, std::string dest, MessageSet &message, MessageTarget *target)
@@ -1264,7 +1268,8 @@ namespace esphome
 
         void NasaProtocol::protocol_update(MessageTarget *target)
         {
-            // Unused for NASA protocol
+            // resend packets
+            send_nasa_packets(target);
         }
 
     } // namespace samsung_ac
